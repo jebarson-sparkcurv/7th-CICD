@@ -1,0 +1,16 @@
+name: Application Deployment
+
+on:
+  push:
+    branches:
+      - developer
+
+jobs:
+
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
