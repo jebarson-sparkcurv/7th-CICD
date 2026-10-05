@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 app = FastAPI()
 
@@ -8,4 +8,7 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "unhealthy"}, 500
+    raise HTTPException(
+        status_code=500,
+        detail="V4 intentional health check failure"
+    )
