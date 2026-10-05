@@ -3,7 +3,7 @@ name: Application Deployment
 on:
   push:
     branches:
-      - developer
+      - main
 permissions:
   contents: read
   issues: write
