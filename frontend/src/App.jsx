@@ -16,9 +16,9 @@ function App() {
           <img src={viteLogo} className="vite" alt="Vite logo" />
         </div>
         <div>
-       <h1>Shopping Application - VERSION 5</h1>
+       <h1>Shopping Application - VERSION 6</h1>
 	  <p>
-  		Version 5 is now live through automated CI/CD.
+  		Version 6 is now live through automated CI/CD.
 	</p>
         </div>
         <button
