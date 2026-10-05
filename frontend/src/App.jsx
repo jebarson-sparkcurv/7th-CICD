@@ -16,10 +16,10 @@ function App() {
           <img src={viteLogo} className="vite" alt="Vite logo" />
         </div>
         <div>
-          <h1>Shopping Application - VERSION 2</h1>
-          <p>
-            This version was deployed through GitHub Actions CI/CD.
-          </p>
+       <h1>Shopping Application - VERSION 3</h1>
+	  <p>
+  		Version 3 is now live through automated CI/CD.
+	</p>
         </div>
         <button
           type="button"
