@@ -360,10 +360,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-
           gh issue create \
+            --repo "${{ github.repository }}" \
             --title "Deployment failed - ${{ github.sha }}" \
             --body "Deployment failed for commit ${{ github.sha }}.
+
+          @jeberson1243
 
           Previous frontend release:
           ${{ steps.previous_release.outputs.previous_frontend }}
