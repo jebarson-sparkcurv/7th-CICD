@@ -333,23 +333,25 @@ jobs:
       # ========================================================
 
       - name: Verify rollback
-        if: failure() && steps.previous_release.outputs.previous_frontend != ''
+        if: failure()
         run: |
-
           echo "Verifying rollback..."
 
           ssh -i ~/.ssh/github-actions \
             -o StrictHostKeyChecking=no \
             "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
-            "set -e; \
-             echo 'Checking backend after rollback...'; \
-             curl -f http://127.0.0.1:8000/health; \
-             echo 'Checking API after rollback...'; \
-             curl -f http://127.0.0.1:4000/api/health; \
-             echo 'Checking frontend after rollback...'; \
-             curl -f http://127.0.0.1:4000; \
-             echo 'Rollback verification successful'"
+            "set -e;
 
+             echo 'Checking backend after rollback...';
+             curl -f http://127.0.0.1:8000/health;
+
+             echo 'Checking API after rollback...';
+             curl -f http://127.0.0.1:4000/api/health;
+
+             echo 'Checking frontend after rollback...';
+             curl -f http://127.0.0.1:4000;
+
+             echo 'Rollback verification successful'"
 
       # ========================================================
       # NOTIFY REVIEWER
