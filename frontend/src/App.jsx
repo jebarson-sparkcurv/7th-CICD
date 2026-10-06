@@ -16,10 +16,10 @@ function App() {
           <img src={viteLogo} className="vite" alt="Vite logo" />
         </div>
         <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
+       <h1>Shopping Application - VERSION 6</h1>
+	  <p>
+  		Version 6 is now live through automated CI/CD.
+	</p>
         </div>
         <button
           type="button"

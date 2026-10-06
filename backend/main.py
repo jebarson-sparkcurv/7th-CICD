@@ -4,7 +4,7 @@ app = FastAPI()
 
 @app.get("/")
 def root():
-    return {"message": "Shopping Backend - Version 1"}
+    return {"message": "Shopping Backend - Version 6"}
 
 @app.get("/health")
 def health():

@@ -1,0 +1,429 @@
+name: Application Deployment !!
+
+on:
+  push:
+    branches:
+      - developer
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+
+  # ============================================================
+  # BUILD
+  # ============================================================
+
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+
+      # -------------------------
+      # Frontend
+      # -------------------------
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Setup Yarn
+        run: corepack prepare yarn@1.22.22 --activate
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: yarn install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: frontend
+        run: yarn build
+
+
+      # -------------------------
+      # Backend
+      # -------------------------
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt
+
+      - name: Test backend
+        working-directory: backend
+        run: python -m py_compile main.py
+
+
+      # -------------------------
+      # Upload build artifacts
+      # -------------------------
+
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend/dist
+
+      - name: Upload backend
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-build
+          path: backend
+
+
+  # ============================================================
+  # DEPLOY
+  # ============================================================
+
+  deploy:
+    name: Deploy Application
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # -------------------------
+      # Download artifacts
+      # -------------------------
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: frontend-build
+
+      - name: Download backend
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-build
+          path: backend-build
+
+
+      # -------------------------
+      # Check downloaded files
+      # -------------------------
+
+      - name: Check downloaded files
+        run: |
+          echo "Frontend files:"
+          ls -la frontend-build
+
+          echo "Backend files:"
+          ls -la backend-build
+
+
+      # ========================================================
+      # SSH
+      # ========================================================
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/github-actions
+          chmod 600 ~/.ssh/github-actions
+
+
+      - name: Test EC2 connection
+        run: |
+          ssh -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "echo 'Connected to EC2 successfully'"
+
+
+      # ========================================================
+      # CAPTURE PREVIOUS RELEASE
+      # ========================================================
+
+      - name: Capture previous release
+        id: previous_release
+        run: |
+
+          PREVIOUS_FRONTEND=$(ssh -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "readlink -f /var/www/cicd-app/current || true")
+
+          PREVIOUS_BACKEND=$(ssh -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "readlink -f /opt/cicd-app-backend/current || true")
+
+          echo "Previous frontend release:"
+          echo "$PREVIOUS_FRONTEND"
+
+          echo "Previous backend release:"
+          echo "$PREVIOUS_BACKEND"
+
+          echo "previous_frontend=$PREVIOUS_FRONTEND" >> "$GITHUB_OUTPUT"
+          echo "previous_backend=$PREVIOUS_BACKEND" >> "$GITHUB_OUTPUT"
+
+
+      # ========================================================
+      # PREPARE RELEASE DIRECTORY
+      # ========================================================
+
+      - name: Prepare release directory
+        run: |
+          ssh -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "sudo mkdir -p /var/www/cicd-app/releases/${{ github.sha }} && \
+             sudo mkdir -p /opt/cicd-app-backend/releases/${{ github.sha }} && \
+             sudo chown -R ubuntu:ubuntu /var/www/cicd-app /opt/cicd-app-backend"
+
+
+      # ========================================================
+      # NGINX
+      # ========================================================
+
+      - name: Configure NGINX
+        run: |
+          ssh -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "sudo tee /etc/nginx/sites-available/cicd-app > /dev/null <<'EOF'
+          server {
+              listen 4000;
+              server_name _;
+
+              root /var/www/cicd-app/current;
+              index index.html;
+
+              location /api/ {
+                  proxy_pass http://127.0.0.1:8000/;
+                  proxy_set_header Host \$host;
+                  proxy_set_header X-Real-IP \$remote_addr;
+                  proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto \$scheme;
+              }
+
+              location / {
+                  try_files \$uri \$uri/ /index.html;
+              }
+          }
+          EOF
+
+          sudo ln -sfn /etc/nginx/sites-available/cicd-app /etc/nginx/sites-enabled/cicd-app
+          sudo rm -f /etc/nginx/sites-enabled/default
+          sudo nginx -t
+          sudo systemctl reload nginx"
+
+
+      # ========================================================
+      # COPY APPLICATION
+      # ========================================================
+
+      - name: Copy frontend to EC2
+        run: |
+          scp -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            -r frontend-build/* \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/var/www/cicd-app/releases/${{ github.sha }}/"
+
+
+      - name: Copy backend to EC2
+        run: |
+          scp -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            -r backend-build/* \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/opt/cicd-app-backend/releases/${{ github.sha }}/"
+
+
+      # ========================================================
+      # BACKEND RUNTIME
+      # ========================================================
+
+      - name: Prepare backend runtime
+        run: |
+          ssh -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "python3 -m venv /opt/cicd-app-backend/releases/${{ github.sha }}/venv && \
+             /opt/cicd-app-backend/releases/${{ github.sha }}/venv/bin/pip install -r /opt/cicd-app-backend/releases/${{ github.sha }}/requirements.txt"
+
+
+      # ========================================================
+      # ACTIVATE NEW RELEASE
+      # ========================================================
+
+      - name: Activate new release
+        run: |
+          ssh -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "sudo ln -sfn /var/www/cicd-app/releases/${{ github.sha }} /var/www/cicd-app/current && \
+             sudo ln -sfn /opt/cicd-app-backend/releases/${{ github.sha }} /opt/cicd-app-backend/current"
+
+
+      # ========================================================
+      # RESTART BACKEND
+      # ========================================================
+
+      - name: Restart backend
+        run: |
+          ssh -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "sudo systemctl restart cicd-backend && \
+             sudo systemctl is-active --quiet cicd-backend"
+
+
+      # ========================================================
+      # HEALTH CHECK
+      # ========================================================
+
+      - name: Health check
+        run: |
+          ssh -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "set -e; \
+             echo 'Checking backend...'; \
+             curl -f http://127.0.0.1:8000/health; \
+             echo 'Checking application API...'; \
+             curl -f http://127.0.0.1:4000/api/health; \
+             echo 'Checking frontend...'; \
+             curl -f http://127.0.0.1:4000; \
+             echo 'All health checks passed'"
+
+
+      # ========================================================
+      # ROLLBACK
+      # ========================================================
+
+      - name: Rollback deployment
+        if: failure() && steps.previous_release.outputs.previous_frontend != ''
+        run: |
+
+          echo "Deployment failed."
+          echo "Starting rollback..."
+
+          echo "Restoring previous frontend:"
+          echo "${{ steps.previous_release.outputs.previous_frontend }}"
+
+          echo "Restoring previous backend:"
+          echo "${{ steps.previous_release.outputs.previous_backend }}"
+
+          ssh -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "sudo ln -sfn '${{ steps.previous_release.outputs.previous_frontend }}' /var/www/cicd-app/current && \
+             sudo ln -sfn '${{ steps.previous_release.outputs.previous_backend }}' /opt/cicd-app-backend/current && \
+             sudo systemctl restart cicd-backend && \
+             sudo systemctl is-active --quiet cicd-backend && \
+             echo 'Rollback completed successfully'"
+
+
+      # ========================================================
+      # VERIFY ROLLBACK
+      # ========================================================
+
+      - name: Verify rollback
+        if: failure()
+        run: |
+          echo "Verifying rollback..."
+
+          ssh -i ~/.ssh/github-actions \
+            -o StrictHostKeyChecking=no \
+            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "set -e;
+
+             echo 'Checking backend after rollback...';
+             curl -f http://127.0.0.1:8000/health;
+
+             echo 'Checking API after rollback...';
+             curl -f http://127.0.0.1:4000/api/health;
+
+             echo 'Checking frontend after rollback...';
+             curl -f http://127.0.0.1:4000;
+
+             echo 'Rollback verification successful'"
+
+      # ========================================================
+      # NOTIFY REVIEWER
+      # ========================================================
+
+      - name: Notify reviewer
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Deployment failed - ${{ github.sha }}" \
+            --body "Deployment failed for commit ${{ github.sha }}.
+
+          @jeberson1243
+
+          Previous frontend release:
+          ${{ steps.previous_release.outputs.previous_frontend }}
+
+          Previous backend release:
+          ${{ steps.previous_release.outputs.previous_backend }}
+
+          Repository:
+          ${{ github.repository }}
+
+          Commit:
+          ${{ github.sha }}
+
+          Workflow:
+          ${{ github.workflow }}
+
+          Run:
+          ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Automatic rollback was attempted."
+
+          
+      - name: Create Pull Request
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Checking for existing pull request..."
+
+          EXISTING_PR=$(gh pr list \
+            --repo "${{ github.repository }}" \
+            --head developer \
+            --base main \
+            --state open \
+            --json number \
+            --jq 'length')
+
+          if [ "$EXISTING_PR" -eq 0 ]; then
+            echo "Creating pull request..."
+
+            gh pr create \
+              --repo "${{ github.repository }}" \
+              --base main \
+              --head developer \
+              --title "Developer → Main" \
+              --body "Automated pull request created after successful deployment to the testing environment.
+
+          Deployment commit:
+          ${{ github.sha }}
+
+          Testing server:
+          http://${{ secrets.EC2_HOST }}:4000
+
+          Please review the changes before merging to main."
+
+          else
+            echo "An open pull request already exists."
+          fi
